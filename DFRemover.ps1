@@ -2174,7 +2174,7 @@ function Show-PeMenu {
 Initialize-Log
 
 Write-Host ''
-Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.2' -ForegroundColor Cyan
+Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.2.1' -ForegroundColor Cyan
 Write-Host '  ──────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
 
 $script:IsAdmin = Test-AdminRights

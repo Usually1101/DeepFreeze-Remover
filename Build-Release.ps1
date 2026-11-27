@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 
-$Version = '1.2'
+$Version = '1.2.1'
 $Src = $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $Src 'dist' }
 $Name = "DeepFreezeRemover-v$Version"
