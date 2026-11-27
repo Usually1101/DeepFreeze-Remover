@@ -1,5 +1,20 @@
 ﻿# 更新日志
 
+## v1.2.2（2026-11-28）
+
+面向"拷到别的电脑上直接运行"的可移植性改进。
+
+### 新增
+
+- 启动时自动解除 **Mark-of-the-Web**（"来自其他计算机"标记）：
+  从 GitHub Release 下载 zip → 解压 → 直接运行的场景下，避免 SmartScreen / 执行策略拦截。
+  逐文件 `Unblock-File`，失败静默忽略，不影响运行。
+
+### 验证
+
+- 可移植性审计：脚本内无硬编码绝对路径（命中的均为循环变量、字符串替换与文档示例）；
+  依赖仅 Windows 自带命令（reg / bcdedit / shutdown / reagentc / wpeutil / sc / cmd / powershell）。
+- 把打包产物复制到全新路径下运行 `Doctor` / `Scan` / `BootEntry`，均正常。
 ## v1.2.1（2026-11-28）
 
 文档版本，功能无变化。

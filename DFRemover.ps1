@@ -61,6 +61,16 @@ param(
 $ErrorActionPreference = 'Continue'
 Set-StrictMode -Off
 
+# 从压缩包/网络拷来的文件会带"来自其他计算机"标记（MOTW），可能被 SmartScreen 或
+# 执行策略拦住。能解就顺手解开，解不了也不影响运行。
+try {
+    if ($PSScriptRoot -and (Test-Path -LiteralPath $PSScriptRoot)) {
+        Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in '.ps1', '.cmd', '.exe', '.dll' } |
+            ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+    }
+} catch { }
+
 # ============================================================================
 # 组件清单（三个脚本保持一致：DFRemover.ps1 / DF-Offline-Clean.ps1 / DF-Offline-Clean.cmd）
 # ============================================================================
@@ -1845,6 +1855,7 @@ function Invoke-BootEntry {
 # ============================================================================
 # 菜单
 # ============================================================================
+$script:MenuEmpty = 0
 function Show-DfMenu {
     while ($true) {
         Write-Host ''
@@ -1865,6 +1876,10 @@ function Show-DfMenu {
         Write-Host '    [0] 退出' -ForegroundColor DarkGray
         Write-Host ''
         $c = Read-Host '  请选择'
+        if ([string]::IsNullOrWhiteSpace($c)) {
+            $script:MenuEmpty++
+            if ($script:MenuEmpty -ge 3) { Write-Host '  连续空输入，退出。' -ForegroundColor DarkGray; return }
+        } else { $script:MenuEmpty = 0 }
         switch ($c.Trim()) {
             '1' { $s = Get-DfSnapshot; Show-DfReport -Snap $s }
             '2' { $s = Get-DfSnapshot; Show-DfReport -Snap $s; [void](New-DfOfflineKit -Snap $s -KitDir $KitDir) }
@@ -2174,7 +2189,7 @@ function Show-PeMenu {
 Initialize-Log
 
 Write-Host ''
-Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.2.1' -ForegroundColor Cyan
+Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.2.2' -ForegroundColor Cyan
 Write-Host '  ──────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
 
 $script:IsAdmin = Test-AdminRights
