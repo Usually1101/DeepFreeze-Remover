@@ -1,0 +1,16 @@
+# 运行产物
+DFRemover.log
+DFUninstall.log
+DFBackup*/
+DFBackup_*/
+
+# 构建产物
+dist/
+PE离线卸载包/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+Thumbs.db
+desktop.ini
