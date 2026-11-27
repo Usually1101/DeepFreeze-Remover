@@ -21,6 +21,8 @@
     PeVerify        在 PE 里复查残留
     Inventory       导出配置清单（不含密码，供重装对照）
     Guide           打开《多种卸载思路对比》教程
+    BootEntry       设置“下次启动进 U 盘/PE”（UEFI 一次性启动）
+    BootEntryClear  清除一次性启动项（恢复原顺序）
 
   关键原理（务必理解，否则会白做）：
     冰点 = 磁盘过滤驱动(DFFilter/DeepFrz/FarDisk...) + 内核服务 + 设备类过滤器
@@ -32,7 +34,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu', 'Scan', 'Auto', 'Remove', 'PrepareOffline', 'Verify', 'Doctor', 'WinRE', 'BootMenu', 'PeScan', 'PeRemove', 'PeVerify', 'Inventory', 'Guide')]
+    [ValidateSet('Menu', 'Scan', 'Auto', 'Remove', 'PrepareOffline', 'Verify', 'Doctor', 'WinRE', 'BootMenu', 'PeScan', 'PeRemove', 'PeVerify', 'Inventory', 'Guide', 'BootEntry', 'BootEntryClear')]
     [string]$Mode = 'Menu',
 
     # 在线卸载时，即使检测到过滤驱动仍在运行也继续（不推荐；冻结状态下做了也白做）
@@ -1665,6 +1667,182 @@ function Show-UninstallGuide {
     }
 }
 # ============================================================================
+# UEFI 一次性启动：下次启动进 U 盘 / PE（不改 BIOS 启动顺序）
+# ============================================================================
+function Test-UefiFirmware {
+    try {
+        if ($env:firmware_type) { return ($env:firmware_type -eq 'UEFI') }
+        $p = Get-CimInstance Win32_DiskPartition -ErrorAction SilentlyContinue |
+            Where-Object { $_.Type -eq 'GPT: System' }
+        return ([bool]$p)
+    } catch { return $false }
+}
+
+function Get-FirmwareBootEntries {
+    # 解析 bcdedit /enum firmware。标签可能是英文也可能被本地化，所以按"GUID 结构"解析而不是按词。
+    $lines = @(& bcdedit.exe /enum firmware 2>$null)
+    $out = New-Object System.Collections.ArrayList
+    $cur = $null
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^\s*(?:identifier|标识符)\s+(\{[0-9a-fA-F\-]+\})') {
+            if ($cur) { [void]$out.Add($cur) }
+            $cur = [pscustomobject]@{ Guid = $matches[1]; Name = ''; Title = '' }
+            # 标题是 identifier 上方最近的一行非空、非分隔线文本
+            for ($j = $i - 1; $j -ge 0; $j--) {
+                $cand = $lines[$j]
+                if ([string]::IsNullOrWhiteSpace($cand)) { continue }
+                if ($cand -match '^-+$') { continue }
+                $cur.Title = $cand.Trim()
+                break
+            }
+            continue
+        }
+        if ($cur -and ($line -match '^\s*(?:description|描述)\s+(.+)$')) {
+            $cur.Name = $matches[1].Trim()
+        }
+    }
+    if ($cur) { [void]$out.Add($cur) }
+    return @($out | Where-Object { $_.Guid -ne '{fwbootmgr}' })
+}
+
+function Get-FwBootSequence {
+    # {fwbootmgr} 里"标签 + GUID 同一行"的项就是 bootsequence（displayorder 是标签行 + 独立 GUID 行）
+    $lines = @(& bcdedit.exe /enum '{fwbootmgr}' 2>$null)
+    foreach ($l in $lines) {
+        if ($l -match '^\s*(\S+)\s+(\{[0-9a-fA-F\-]{36}\})\s*$') {
+            if ($matches[1] -match '^(identifier|标识符)$') { continue }
+            return $matches[2]
+        }
+    }
+    return $null
+}
+
+function Set-OneTimeBoot {
+    param([string]$Guid, [switch]$DryRun)
+
+    if ($DryRun) {
+        Write-Log ('  [演练] 将设置一次性启动：' + $Guid) 'DIM'
+        return $true
+    }
+
+    # 改 BCD 前先导出备份
+    try {
+        $dir = if (Test-PathWritable -Dir $PSScriptRoot) { $PSScriptRoot } else { Get-PortableWritableDir }
+        if ($dir) {
+            $bk = Join-Path $dir ('BCD-Backup-' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.bcd')
+            & bcdedit.exe /export $bk 2>$null | Out-Null
+            if (Test-Path -LiteralPath $bk) {
+                Write-Log ('  BCD 已备份：' + $bk) 'OK'
+            }
+        }
+    } catch { }
+
+    $r = & bcdedit.exe /set '{fwbootmgr}' bootsequence $Guid 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log ('  ✗ 设置失败：' + ($r -join ' ')) 'ERROR'
+        return $false
+    }
+    $now = Get-FwBootSequence
+    if ($now -eq $Guid) {
+        Write-Log ('  ✅ 已设置：下次启动优先尝试 ' + $Guid) 'OK'
+    } else {
+        Write-Log ('  ⚠ 命令返回成功，但回读不一致（当前：' + $now + '）') 'WARN'
+        Write-Log '    某些 OEM 固件不支持这种一次性引导，重启后可能仍进 Windows。' 'DIM'
+    }
+    return $true
+}
+
+function Clear-OneTimeBoot {
+    $had = Get-FwBootSequence
+    $r = & bcdedit.exe /deletevalue '{fwbootmgr}' bootsequence 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log '  已清除一次性启动项，恢复原有启动顺序。' 'OK'
+        return $true
+    }
+    if ($had) {
+        Write-Log ('  ✗ 清除失败：' + ($r -join ' ')) 'ERROR'
+        return $false
+    }
+    Write-Log '  当前本来就没有设置一次性启动项。' 'DIM'
+    return $true
+}
+
+function Invoke-BootEntry {
+    param([switch]$DryRun)
+
+    Write-Rule '下次启动进入 U 盘 / PE（UEFI 一次性启动）'
+
+    if (-not (Test-UefiFirmware)) {
+        Write-Log '  当前是 Legacy BIOS 启动，Windows 无法安排"一次性启动项"。' 'ERROR'
+        Write-Log '  Legacy 机器只能用开机热键（F12 / F11 / Esc / F8）选启动设备。' 'DIM'
+        Write-Log '  不想按热键的话：菜单 [7] 进"高级启动"，再点【使用设备】选 U 盘。' 'DIM'
+        return $false
+    }
+
+    $entries = @(Get-FirmwareBootEntries)
+    if ($entries.Count -eq 0) {
+        Write-Log '  没有读到任何固件启动项（bcdedit 可能被策略限制）。' 'ERROR'
+        return $false
+    }
+
+    $cur = Get-FwBootSequence
+    if ($cur) {
+        Write-Log ('  注意：当前已经设置了一次性启动 -> ' + $cur) 'WARN'
+        Write-Log '        它只生效一次；重启后会自动恢复。选 [0] 可以立即清除。' 'DIM'
+    }
+
+    Write-Host ''
+    Write-Log '  固件里可用的启动项：'
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $name = if ($entries[$i].Name) { $entries[$i].Name } else { $entries[$i].Title }
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $name) -ForegroundColor White
+        Write-Host ("         {0}" -f $entries[$i].Guid) -ForegroundColor DarkGray
+    }
+    Write-Host '    [0] 清除已设置的一次性启动项' -ForegroundColor DarkGray
+    Write-Host ''
+
+    $sel = Read-Host '  选择序号（直接回车 = 取消）'
+    if ([string]::IsNullOrWhiteSpace($sel)) { Write-Log '  已取消。' 'DIM'; return $false }
+
+    if ($sel.Trim() -eq '0') { return (Clear-OneTimeBoot) }
+
+    $n = 0
+    if (-not [int]::TryParse($sel, [ref]$n) -or $n -lt 1 -or $n -gt $entries.Count) {
+        Write-Log '  序号无效。' 'ERROR'
+        return $false
+    }
+    $e = $entries[$n - 1]
+    $name = if ($e.Name) { $e.Name } else { $e.Title }
+
+    Write-Host ''
+    Write-Log ('  下次启动将指向：' + $name) 'OK'
+    Write-Log '  · 只影响**下一次**启动，之后自动回到原来的顺序' 'DIM'
+    Write-Log '  · **不会**修改 BIOS 里保存的启动顺序' 'DIM'
+    Write-Log '  · 如果该设备其实不可启动，大多数固件会自动跳到下一项（回到 Windows）' 'DIM'
+    Write-Log '  · 前提：U 盘是 UEFI 可引导的（PE 支持 UEFI）' 'DIM'
+
+    if (-not $DryRun) {
+        $ok = Read-Host '  确认设置？输入 YES 继续'
+        if ($ok -ne 'YES') { Write-Log '  已取消。' 'DIM'; return $false }
+    }
+
+    $done = Set-OneTimeBoot -Guid $e.Guid -DryRun:$DryRun
+    if (-not $done) { return $false }
+
+    if (-not $DryRun) {
+        $a = Read-Host '  现在重启吗？输入 REBOOT 立即重启，回车稍后自己重启'
+        if ($a -eq 'REBOOT') {
+            Write-Log '  5 秒后重启（开机时请确保 U 盘已插好）...' 'WARN'
+            & shutdown.exe /r /t 5
+        } else {
+            Write-Log '  已就绪，你随时重启即可。' 'DIM'
+        }
+    }
+    return $true
+}
+
+# ============================================================================
 # 菜单
 # ============================================================================
 function Show-DfMenu {
@@ -1683,6 +1861,7 @@ function Show-DfMenu {
         Write-Host '    [7] 一键重启到恢复环境（没有实体键盘用这个）' -ForegroundColor Green
         Write-Host '    [8] 导出配置清单（不含密码，重装时对照）' -ForegroundColor White
         Write-Host '    [9] 卸载思路对比（打开教程）' -ForegroundColor White
+        Write-Host '   [10] 下次启动进 U 盘/PE（UEFI 一次性启动）' -ForegroundColor Green
         Write-Host '    [0] 退出' -ForegroundColor DarkGray
         Write-Host ''
         $c = Read-Host '  请选择'
@@ -1705,6 +1884,7 @@ function Show-DfMenu {
             '7' { [void](Invoke-RebootToRecovery -DryRun:$DryRun) }
             '8' { $s = Get-DfSnapshot; [void](Invoke-DfExportConfig -Snap $s) }
             '9' { Show-UninstallGuide }
+            '10' { [void](Invoke-BootEntry -DryRun:$DryRun) }
             '6' {
                 Show-NoUsbOptions
                 $a = Read-Host '  现在准备"用系统自带恢复环境"的方案吗？输入 Y 继续'
@@ -1994,7 +2174,7 @@ function Show-PeMenu {
 Initialize-Log
 
 Write-Host ''
-Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.1' -ForegroundColor Cyan
+Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.2' -ForegroundColor Cyan
 Write-Host '  ──────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
 
 $script:IsAdmin = Test-AdminRights
@@ -2077,6 +2257,8 @@ try {
         'BootMenu' { [void](Invoke-RebootToRecovery -DryRun:$DryRun) }
         'Inventory' { $s = Get-DfSnapshot; Show-DfReport -Snap $s; [void](Invoke-DfExportConfig -Snap $s) }
         'Guide' { Show-UninstallGuide }
+        'BootEntry' { [void](Invoke-BootEntry -DryRun:$DryRun) }
+        'BootEntryClear' { [void](Clear-OneTimeBoot) }
         'WinRE' {
             Show-NoUsbOptions
             [void](Invoke-WinREPrep -Volume $StageVolume -DryRun:$DryRun -StageOnly:$StageOnly)

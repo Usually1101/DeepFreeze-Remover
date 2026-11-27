@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 
-$Version = '1.1'
+$Version = '1.2'
 $Src = $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $Src 'dist' }
 $Name = "DeepFreezeRemover-v$Version"
@@ -142,6 +142,7 @@ $quick = @(
     '  [7] 不用键盘   一键重启到恢复环境（触摸设备 / 希沃这类机器）',
     '  [8] 导出清单   导出配置清单（不含密码，重装时对照）',
     '  [9] 卸载思路   打开《多种卸载思路对比》教程',
+    ' [10] 进 PE     下次启动直接进 U 盘/PE（UEFI，不用按热键）',
     '',
     '离线卸载（忘记密码 + 系统冻结）三步：',
     '  1) 选 [2]，把生成的 PE离线卸载包 拷到 U 盘',
