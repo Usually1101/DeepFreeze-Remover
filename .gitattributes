@@ -1,5 +1,9 @@
-# 批处理是 GBK 编码 + CRLF，必须原样保存，否则中文与 goto 标签都会坏
+# .cmd files are GBK-encoded with CRLF line endings.
+# They must be stored byte-for-byte, otherwise Chinese text breaks and
+# batch labels (goto) stop working. "-text" disables all conversion.
 *.cmd -text
+
+# PowerShell and Markdown are text; force CRLF in working tree for PS1.
 *.ps1 text eol=crlf
-*.md  text eol=lf
+*.md text eol=lf
 LICENSE text eol=lf
