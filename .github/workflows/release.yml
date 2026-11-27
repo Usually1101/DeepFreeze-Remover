@@ -1,0 +1,51 @@
+name: Release
+
+# 打 tag（v*）时自动：构建安装包 → 创建 GitHub Release → 上传 zip
+# 这样发布不需要任何人手工点"Publish release"，也不需要 PAT。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Environment info
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          git log --oneline -3
+
+      - name: Build package (QA + zip)
+        shell: pwsh
+        run: |
+          ./Build-Release.ps1
+
+      - name: Show artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Recurse -File |
+            Select-Object @{n='file';e={$_.FullName.Replace("$PWD\",'')}}, Length |
+            Format-Table -AutoSize
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DeepFreezeRemover-*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
