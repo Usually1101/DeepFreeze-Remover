@@ -638,7 +638,7 @@ $startTime = Get-Date
 
 Write-Host ''
 Write-Host '  ┌──────────────────────────────────────────────────────────────┐' -ForegroundColor Cyan
-Write-Host '  │   冰点还原 (Deep Freeze)  PE 离线强制卸载器   v1.0            │' -ForegroundColor Cyan
+Write-Host '  │   冰点还原 (Deep Freeze)  PE 离线强制卸载器   v1.1            │' -ForegroundColor Cyan
 Write-Host '  └──────────────────────────────────────────────────────────────┘' -ForegroundColor Cyan
 
 try {

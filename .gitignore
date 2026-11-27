@@ -14,3 +14,6 @@ PE离线卸载包/
 *.swp
 Thumbs.db
 desktop.ini
+
+# 导出的配置清单（本地产物）
+DF配置清单-*.md

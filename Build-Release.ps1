@@ -8,8 +8,8 @@
     powershell -ExecutionPolicy Bypass -File .\Build-Release.ps1 -NoZip
 
   产出：
-    dist\DeepFreezeRemover-v1.0\        ← 便携目录，直接整个拷到 U 盘
-    dist\DeepFreezeRemover-v1.0.zip     ← 压缩包，便于分发
+    dist\DeepFreezeRemover-v1.1\        ← 便携目录，直接整个拷到 U 盘
+    dist\DeepFreezeRemover-v1.1.zip     ← 压缩包，便于分发
     dist\SHA256.txt                     ← 校验值（换电脑后可比对，确认没被改过）
 #>
 [CmdletBinding()]
@@ -23,7 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 
-$Version = '1.0'
+$Version = '1.1'
 $Src = $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $Src 'dist' }
 $Name = "DeepFreezeRemover-v$Version"
@@ -140,6 +140,8 @@ $quick = @(
     '  [5] 环境自检   换了一台电脑、或工具行为不对，先跑这个',
     '  [6] 不用 U 盘   用系统自带的恢复环境（WinRE）卸载',
     '  [7] 不用键盘   一键重启到恢复环境（触摸设备 / 希沃这类机器）',
+    '  [8] 导出清单   导出配置清单（不含密码，重装时对照）',
+    '  [9] 卸载思路   打开《多种卸载思路对比》教程',
     '',
     '离线卸载（忘记密码 + 系统冻结）三步：',
     '  1) 选 [2]，把生成的 PE离线卸载包 拷到 U 盘',

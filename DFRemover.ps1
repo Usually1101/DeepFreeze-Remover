@@ -19,6 +19,8 @@
     PeScan          在 PE 里检测目标系统的冰点（只读）
     PeRemove        在 PE 里强制卸载（自动识别系统盘）
     PeVerify        在 PE 里复查残留
+    Inventory       导出配置清单（不含密码，供重装对照）
+    Guide           打开《多种卸载思路对比》教程
 
   关键原理（务必理解，否则会白做）：
     冰点 = 磁盘过滤驱动(DFFilter/DeepFrz/FarDisk...) + 内核服务 + 设备类过滤器
@@ -30,7 +32,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu', 'Scan', 'Auto', 'Remove', 'PrepareOffline', 'Verify', 'Doctor', 'WinRE', 'BootMenu', 'PeScan', 'PeRemove', 'PeVerify')]
+    [ValidateSet('Menu', 'Scan', 'Auto', 'Remove', 'PrepareOffline', 'Verify', 'Doctor', 'WinRE', 'BootMenu', 'PeScan', 'PeRemove', 'PeVerify', 'Inventory', 'Guide')]
     [string]$Mode = 'Menu',
 
     # 在线卸载时，即使检测到过滤驱动仍在运行也继续（不推荐；冻结状态下做了也白做）
@@ -1516,6 +1518,153 @@ function Invoke-DfVerify {
 }
 
 # ============================================================================
+# 导出配置清单（刻意不含密码：只记录结构信息，不导出任何注册表值）
+# ============================================================================
+function Invoke-DfExportConfig {
+    param($Snap, [string]$OutDir)
+
+    Write-Rule '导出配置清单（不含密码）'
+
+    if (-not $OutDir) {
+        $OutDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    }
+    if (-not (Test-PathWritable -Dir $OutDir)) {
+        $alt = Get-PortableWritableDir
+        if ($alt) { $OutDir = $alt } else {
+            Write-Log '  ✗ 找不到可写目录，无法导出。' 'ERROR'
+            return $false
+        }
+    }
+
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $file = Join-Path $OutDir ('DF配置清单-' + $stamp + '.md')
+    $outEnc = New-Object System.Text.UTF8Encoding($true)
+
+    $L = New-Object System.Collections.Generic.List[string]
+    $L.Add('# 冰点还原 (Deep Freeze) 配置清单')
+    $L.Add('')
+    $L.Add('> 本文件**刻意不包含任何注册表值**。冰点把与密码相关的数据存放在注册表值里，')
+    $L.Add('> 因此这里只记录"结构信息"（有哪些组件、在哪、什么版本），供卸载后重装时对照。')
+    $L.Add('')
+    $L.Add('## 基本信息')
+    $L.Add('')
+    $L.Add('| 项 | 值 |')
+    $L.Add('|---|---|')
+    $L.Add(('| 生成时间 | {0} |' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
+    $L.Add(('| 计算机名 | {0} |' -f $env:COMPUTERNAME))
+    $L.Add(('| 操作系统 | {0} |' -f (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption))
+    $L.Add(('| 系统盘 | {0} |' -f $env:SystemDrive))
+    $L.Add(('| 冻结状态判断 | {0} |' -f $(if ($Snap.DriverRunning) { '过滤驱动正在运行（很可能是冻结状态）' } else { '过滤驱动未运行（未冻结或已禁用）' })))
+    $L.Add('')
+
+    $L.Add('## 检测到的组件')
+    $L.Add('')
+    if (-not ($Snap.Services.Count -or $Snap.FilterRefs.Count -or $Snap.Dirs.Count -or
+              $Snap.DriverFiles.Count -or $Snap.DataFiles.Count -or $Snap.FaronicsKeys.Count)) {
+        $L.Add('（未检测到冰点组件）')
+        $L.Add('')
+    }
+    if ($Snap.Services.Count) {
+        $L.Add('### 服务 / 驱动')
+        $L.Add('')
+        $L.Add('| 名称 | 类型 | 状态 | 映像路径 |')
+        $L.Add('|---|---|---|---|')
+        foreach ($s in $Snap.Services) {
+            $L.Add(('| {0} | {1} | {2} | {3} |' -f $s.Name, $(if ($s.IsKernel) { '驱动' } else { '服务' }), $s.Status, $s.ImagePath))
+        }
+        $L.Add('')
+    }
+    if ($Snap.FilterRefs.Count) {
+        $L.Add('### 开机过滤器（UpperFilters / LowerFilters）')
+        $L.Add('')
+        $L.Add('| 设备类 GUID | 值名 | 当前内容 | 冰点条目 |')
+        $L.Add('|---|---|---|---|')
+        foreach ($r in $Snap.FilterRefs) {
+            $L.Add(('| {0} | {1} | {2} | {3} |' -f $r.KeyName, $r.ValueName, $r.Full, $r.Hits))
+        }
+        $L.Add('')
+    }
+    if ($Snap.Dirs.Count) {
+        $L.Add('### 安装目录')
+        $L.Add('')
+        foreach ($d in $Snap.Dirs) { $L.Add(('- `' + $d + '`')) }
+        $L.Add('')
+    }
+    if ($Snap.DriverFiles.Count) {
+        $L.Add('### 驱动 / 程序文件')
+        $L.Add('')
+        foreach ($f in $Snap.DriverFiles) { $L.Add(('- `' + $f.Path + '`')) }
+        $L.Add('')
+    }
+    if ($Snap.DataFiles.Count) {
+        $L.Add('### 数据文件（persi*.sys）')
+        $L.Add('')
+        $L.Add('这些文件所在的卷，很可能就是冰点"冻结"的卷：')
+        $L.Add('')
+        foreach ($f in $Snap.DataFiles) {
+            $vol = Split-Path -Qualifier $f.Path
+            $L.Add(('- `' + $f.Path + '`（卷 {0}）' -f $vol))
+        }
+        $L.Add('')
+    }
+    if ($Snap.FaronicsKeys.Count) {
+        $L.Add('### 注册表键（只列路径，不导出内容）')
+        $L.Add('')
+        foreach ($k in $Snap.FaronicsKeys) { $L.Add(('- `' + $k + '`')) }
+        $L.Add('')
+    }
+
+    $L.Add('## 版本信息')
+    $L.Add('')
+    if ($Snap.Uninstall.Count) {
+        $L.Add('| 名称 | 版本 | 发布者 |')
+        $L.Add('|---|---|---|')
+        foreach ($u in $Snap.Uninstall) { $L.Add(('| {0} | {1} | {2} |' -f $u.Name, $u.Version, $u.Publisher)) }
+    } else {
+        $L.Add('（未在控制面板卸载项中找到版本信息）')
+    }
+    $L.Add('')
+
+    $L.Add('## 重装后对照表')
+    $L.Add('')
+    $L.Add('卸载并重新安装冰点时，按这张表逐项确认（重装时可以设置**新密码**）：')
+    $L.Add('')
+    $vols = @($Snap.DataFiles | ForEach-Object { Split-Path -Qualifier $_.Path } | Select-Object -Unique)
+    $L.Add(('- [ ] 需要冻结的卷：{0}' -f $(if ($vols) { $vols -join ', ' } else { '（未推断出，请按实际情况勾选）' })))
+    $L.Add(('- [ ] 是否开机即冻结：{0}' -f '需要在冰点界面确认（本清单无法读取该设置）'))
+    $L.Add('- [ ] 解冻/冻结的时间窗口（如有）')
+    $L.Add('- [ ] 密码：重新设置')
+    if ($Snap.Tasks.Count) {
+        $L.Add(('- [ ] 计划任务：{0}' -f (($Snap.Tasks | ForEach-Object { $_.Path + $_.Name }) -join '; ')))
+    }
+    if ($Snap.RunValues.Count) {
+        $L.Add(('- [ ] 开机启动项：{0}' -f (($Snap.RunValues | ForEach-Object { $_.Name }) -join '; ')))
+    }
+    $L.Add('')
+
+    try {
+        [IO.File]::WriteAllLines($file, [string[]]$L, $outEnc)
+        Write-Log ('  ✅ 已导出：' + $file) 'OK'
+        Write-Log '  该文件只含结构信息，不含密码相关数据。' 'DIM'
+        return $true
+    } catch {
+        Write-Log ('  ✗ 写入失败：' + $_.Exception.Message) 'ERROR'
+        return $false
+    }
+}
+
+function Show-UninstallGuide {
+    $doc = Join-Path $PSScriptRoot 'docs\卸载思路对比.md'
+    if (Test-Path -LiteralPath $doc) {
+        Write-Log ('  教程：' + $doc) 'OK'
+        try { Start-Process -FilePath $doc -ErrorAction Stop | Out-Null }
+        catch { Write-Log '  无法自动打开，请按上面的路径手动查看。' 'WARN' }
+    } else {
+        Write-Log ('  找不到教程文件：' + $doc) 'ERROR'
+        Write-Log '  请确认 docs 文件夹完整（可从仓库重新下载）。' 'DIM'
+    }
+}
+# ============================================================================
 # 菜单
 # ============================================================================
 function Show-DfMenu {
@@ -1532,6 +1681,8 @@ function Show-DfMenu {
         Write-Host '    [5] 环境自检（换电脑先跑这个）' -ForegroundColor White
         Write-Host '    [6] 不想做 U 盘？用系统自带恢复环境卸载' -ForegroundColor Green
         Write-Host '    [7] 一键重启到恢复环境（没有实体键盘用这个）' -ForegroundColor Green
+        Write-Host '    [8] 导出配置清单（不含密码，重装时对照）' -ForegroundColor White
+        Write-Host '    [9] 卸载思路对比（打开教程）' -ForegroundColor White
         Write-Host '    [0] 退出' -ForegroundColor DarkGray
         Write-Host ''
         $c = Read-Host '  请选择'
@@ -1552,6 +1703,8 @@ function Show-DfMenu {
             '4' { [void](Invoke-DfVerify) }
             '5' { [void](Show-Doctor) }
             '7' { [void](Invoke-RebootToRecovery -DryRun:$DryRun) }
+            '8' { $s = Get-DfSnapshot; [void](Invoke-DfExportConfig -Snap $s) }
+            '9' { Show-UninstallGuide }
             '6' {
                 Show-NoUsbOptions
                 $a = Read-Host '  现在准备"用系统自带恢复环境"的方案吗？输入 Y 继续'
@@ -1841,7 +1994,7 @@ function Show-PeMenu {
 Initialize-Log
 
 Write-Host ''
-Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.0' -ForegroundColor Cyan
+Write-Host '  冰点还原 (Deep Freeze) 强制卸载工具  v1.1' -ForegroundColor Cyan
 Write-Host '  ──────────────────────────────────────────────────────────────' -ForegroundColor DarkCyan
 
 $script:IsAdmin = Test-AdminRights
@@ -1922,6 +2075,8 @@ try {
         'Verify' { [void](Invoke-DfVerify) }
         'Doctor' { [void](Show-Doctor) }
         'BootMenu' { [void](Invoke-RebootToRecovery -DryRun:$DryRun) }
+        'Inventory' { $s = Get-DfSnapshot; Show-DfReport -Snap $s; [void](Invoke-DfExportConfig -Snap $s) }
+        'Guide' { Show-UninstallGuide }
         'WinRE' {
             Show-NoUsbOptions
             [void](Invoke-WinREPrep -Volume $StageVolume -DryRun:$DryRun -StageOnly:$StageOnly)
